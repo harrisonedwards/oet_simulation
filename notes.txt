@@ -1,0 +1,28 @@
+OVERALL GOAL: COLLECT ALL GREEN CELLS WITHIN A SAMPLE. PLACE THEM IN A DESIGNATED DROP ZONE. 
+
+STATE
+=====
+-we want the state information to capture everything useful about the oet environment
+
+#DONE
+-which direction the robot is facing
+-relative location of the closest wall
+-relative location of the drop zone
+-the number of green cells that have not been placed in the drop zone
+-the type and relative location of the closest cell (maybe make it the 3 closest cells?)
+-whether or not the robot is currently holding a cell, and what type it is
+
+#TODO
+
+
+ACTIONS
+=======
+-move forward
+-move backwards
+-turn right
+-turn left
+
+LOSS
+====
+-if the robot has collided with the 'wall'
+-if the robot has touched a red cell (or is perhaps in close proximity to one)
