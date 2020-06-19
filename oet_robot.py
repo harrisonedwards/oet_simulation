@@ -2,9 +2,12 @@ import pygame
 from pygame.locals import *
 import numpy as np
 from keras.optimizers import SGD
-from keras.models import Sequential
-from keras.layers.core import Dense
+import matplotlib.pyplot as plt
+from math import atan2, degrees, pi
 
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
 
 def get_percent_cells_not_in_drop_zone(cells, drop_zone):
     num_green = len([x for x in cells if x.type == 'green'])
@@ -65,15 +68,21 @@ class Robot(pygame.sprite.Sprite):
         self.model = self.network()
         self.reward = 0
         self.gamma = 0.9
+        plt.ion()
+        plt.plot([1.6, 2.7])
+        plt.show()
 
     def network(self):
-        model = Sequential()
-        model.add(Dense(output_dim=64, activation='relu', input_dim=13))
-        model.add(Dense(output_dim=128, activation='relu'))
-        model.add(Dense(output_dim=256, activation='relu'))
-        model.add(Dense(output_dim=4, activation='softmax'))
+        # TODO: make it so we have two outputs: l/r turning and forward/backward turning simultaneously
+        input = keras.layers.Input(13)
+        x = keras.layers.Dense(64)(input)
+        x = keras.layers.Dense(128)(x)
+        x = keras.layers.Dense(256)(x)
+        l_r = keras.layers.Dense(2, activation='softmax')(x)
+        f_b = keras.layers.Dense(2, activation='softmax')(x)
         opt = SGD()
-        model.compile(loss='mse', optimizer=opt)
+        model = keras.Model(inputs=input, outputs=[l_r, f_b])
+        model.compile(optimizer='adam', loss='mse')
         return model
 
     def update(self, final_move):
@@ -184,15 +193,38 @@ class Robot(pygame.sprite.Sprite):
 
         # penalize for getting close to a red cell
         if state[7]:
-            self.reward -= np.sqrt(state[4]**2 + state[5]**2)*10
+            self.reward -= np.sqrt(state[4]**2 + state[5]**2)
 
         # penalize for picking up a red cell
         if state[-1]:
             self.reward -= 1
 
+        # penalize for facing towards a red cell
+        if state[7]:
+            cell_angle = degrees(atan2(-state[5] , state[4]))
+            if cell_angle < 0:
+                cell_angle += 360
+            delta_angle = -((self.angle + 90)%360 - cell_angle)
+            if delta_angle > 180:
+                delta_angle -= 360
+            self.reward -= delta_angle / 360
+
+
+        # penalize for staying in relatively the same location for a long time
+
+        # reward for facing towards a green cell
+        if state[6]:
+            cell_angle = degrees(atan2(-state[5] , state[4]))
+            if cell_angle < 0:
+                cell_angle += 360
+            delta_angle = -((self.angle + 90)%360 - cell_angle)
+            if delta_angle > 180:
+                delta_angle -= 360
+            self.reward += delta_angle / 360
+
         # reward for getting close to a green cell:
         if state[6]:
-            self.reward += np.sqrt(state[4]**2 + state[5]**2)*10
+            self.reward += np.sqrt(state[4]**2 + state[5]**2)
 
         # reward for picking up a green cell
         if state[-2]:
@@ -206,16 +238,26 @@ class Robot(pygame.sprite.Sprite):
         if state[-2]:
             self. reward += np.sqrt(state[8]**2 + state[9]**2)
 
-        print(self.reward)
+        # print(self.reward)
         return self.reward
 
-    def train_short_memory(self, state_old, final_move, reward, state_new):
-        target = reward
+    def train_short_memory(self, state_old, old_move, reward, state_new):
+        # target = reward
 
-        target = reward + self.gamma * np.amax(self.model.predict(state_new.reshape((1, 13)))[0])
+        old_move_f_b, old_move_l_r = old_move[0:2], old_move[-2:]
 
-        target_f = self.model.predict(state_old.reshape((1, 13)))
+        pred_f_b, pred_l_r = self.model.predict(state_new.reshape((1, 13)))
 
-        target_f[0][np.argmax(final_move)] = target
+        # handle forward and backward target update
+        target_f_b = reward + self.gamma * np.amax(pred_f_b)
+        target_old_f_b = self.model.predict(state_old.reshape((1, 13)))[0]
+        target_old_f_b[0][np.argmax(old_move_f_b)] = target_f_b
 
-        self.model.fit(state_old.reshape((1, 13)), target_f, epochs=1, verbose=0)
+        # handle left and right target update
+        target_l_r = reward + self.gamma * np.amax(pred_l_r)
+        target_old_l_r = self.model.predict(state_old.reshape((1, 13)))[1]
+        target_old_l_r[0][np.argmax(old_move_l_r)] = target_l_r
+
+        target_f = np.concatenate((target_old_f_b[0] , target_old_l_r[0]))
+
+        self.model.fit(state_old.reshape((1, 13)), [target_old_f_b[0].reshape((1,2)), target_old_l_r[0].reshape((1,2))], epochs=1, verbose=0)

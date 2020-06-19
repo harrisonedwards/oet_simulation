@@ -104,19 +104,23 @@ def main(args):
         screen.blit(entity.image, entity.rect)
 
     running = True
+    # TODO make this counter affect the robots randomness and how much time it spends in one place
+    counter = 1.0
     while running:
 
         state_old = rbt.get_state(cells, dz)
-
+        counter -= 1e-0
         if np.random.randint(0, 2) > rbt.epsilon:
-            final_move = to_categorical(np.random.randint(0, 3), num_classes=4)
-            # print('RANDOM:', final_move)
+            final_move = np.concatenate((to_categorical(np.random.randint(0, 2), num_classes=2),to_categorical(np.random.randint(0, 2), num_classes=2)))
+            print('RANDOM:', final_move)
         else:
             # predict action based on the old state
-            prediction = rbt.model.predict(state_old.reshape((1, 13)))
-            final_move = to_categorical(np.argmax(prediction[0]), num_classes=4)
-            # print('PREDICT:', final_move)
-
+            move_f_b, move_l_r = rbt.model.predict(state_old.reshape((1, 13)))
+            move_f_b = to_categorical(np.argmax(move_f_b[0]), 2)
+            move_l_r = to_categorical(np.argmax(move_l_r[0]), 2)
+            final_move = np.concatenate((move_f_b, move_l_r))
+            print('PREDICT:', final_move)
+        # print(counter)
 
         for event in pygame.event.get():
             if event.type == KEYDOWN:
@@ -146,8 +150,9 @@ def main(args):
 
         # train short memory base on the new action and state
         rbt.train_short_memory(state_old, final_move, reward, state_new)
+
         # store the new data into a long term memory
-        # rbt.remember(state_old, final_move, reward, state_new, game.crash)
+        # rbt.remember(state_old, final_move, reward, state_new)
 
         # update display
         pygame.display.flip()
