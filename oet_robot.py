@@ -4,10 +4,11 @@ import numpy as np
 from keras.optimizers import SGD
 import matplotlib.pyplot as plt
 from math import atan2, degrees, pi
-
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
+import matplotlib.pyplot as plt
+
 
 def get_percent_cells_not_in_drop_zone(cells, drop_zone):
     num_green = len([x for x in cells if x.type == 'green'])
@@ -46,6 +47,19 @@ def rotate(image, pos, angle):
     return rotated_image, origin
 
 
+def get_sum_of_distances(cell_type, cells, rbt):
+    rbt_center = np.array(rbt.rect.center)
+    sum = 0
+    for cell in cells:
+        if cell.type == cell_type:
+            sum += np.array(cell.rect.center) - rbt_center
+    sum = np.sqrt(sum[0] ** 2 + sum[1] ** 2)
+    return sum
+
+def sigmoid(x):
+  return 1 / (1 + np.exp(-x))
+
+
 class Robot(pygame.sprite.Sprite):
 
     def __init__(self, start_loc, screen, screen_width, screen_height):
@@ -64,24 +78,27 @@ class Robot(pygame.sprite.Sprite):
         self.carrying_cell_type = None
         self.screen_width = screen_width
         self.screen_height = screen_height
-        self.epsilon = .5
+        self.epsilon = 2
         self.model = self.network()
-        self.reward = 0
+        self.old_reward = 0
         self.gamma = 0.9
-        plt.ion()
-        plt.plot([1.6, 2.7])
-        plt.show()
 
     def network(self):
-        # TODO: make it so we have two outputs: l/r turning and forward/backward turning simultaneously
-        input = keras.layers.Input(13)
-        x = keras.layers.Dense(64)(input)
-        x = keras.layers.Dense(128)(x)
-        x = keras.layers.Dense(256)(x)
-        l_r = keras.layers.Dense(2, activation='softmax')(x)
-        f_b = keras.layers.Dense(2, activation='softmax')(x)
-        opt = SGD()
-        model = keras.Model(inputs=input, outputs=[l_r, f_b])
+        input1 = keras.layers.Input(15)
+
+        x = keras.layers.Dense(64, activation='elu')(input1)
+        x = keras.layers.Dense(128, activation='elu')(x)
+        x = keras.layers.Dense(256, activation='elu')(x)
+        x = keras.layers.Dense(512, activation='elu')(x)
+
+        # input2 = keras.layers.Input((500, 500, 1))
+        # c = keras.layers.Conv2D(32, 3)(input2)
+        # c = keras.layers.Conv2D(64, 3)(c)
+        # c = keras.layers.Flatten()(c)
+        # conc = keras.layers.concatenate((x, c))
+
+        output = keras.layers.Dense(4, activation='softmax')(x)
+        model = keras.Model(inputs=input1, outputs=output)
         model.compile(optimizer='adam', loss='mse')
         return model
 
@@ -99,6 +116,15 @@ class Robot(pygame.sprite.Sprite):
 
         # replacing human controls with network predictions
 
+        if self.rect.left < 0:
+            self.pos[0] += 10
+        if self.rect.right > self.screen_width:
+            self.pos[0] -= 10
+        if self.rect.top <= 0:
+            self.pos[1] += 10
+        if self.rect.bottom >= self.screen_height:
+            self.pos[1] -= 10
+
         if final_move[0]:
             self.pos[0] = self.pos[0] - np.sin(self.angle * np.pi / 180) * self.speed
             self.pos[1] = self.pos[1] - np.cos(self.angle * np.pi / 180) * self.speed
@@ -106,24 +132,18 @@ class Robot(pygame.sprite.Sprite):
             self.pos[0] = self.pos[0] + np.sin(self.angle * np.pi / 180) * self.speed
             self.pos[1] = self.pos[1] + np.cos(self.angle * np.pi / 180) * self.speed
         if final_move[2]:
-            self.angle += self.speed
+            self.angle += self.speed * 2
         if final_move[3]:
-            self.angle -= self.speed
+            self.angle -= self.speed * 2
 
         self.angle = self.angle % 360
 
         rotated_image, origin = rotate(self.image, self.pos, self.angle)
         self.rect.topleft = origin
         self.mask = pygame.mask.from_surface(rotated_image)
+
         # cases for managing collision with the edge
-        if self.rect.left < 0:
-            self.rect.left = 0
-        if self.rect.right > self.screen_width:
-            self.rect.right = self.screen_width
-        if self.rect.top <= 0:
-            self.rect.top = 0
-        if self.rect.bottom >= self.screen_height:
-            self.rect.bottom = self.screen_height
+
         self.screen.blit(rotated_image, self.rect.topleft)
 
     def get_closest_wall(self):
@@ -169,62 +189,63 @@ class Robot(pygame.sprite.Sprite):
     def get_is_holding_cell(self, cells):
         return [int(self.carrying_cell_type == 'green'), int(self.carrying_cell_type == 'red')]
 
-    def get_state(self, cells, drop_zone):
-        # print('getting state')
-        # print(f'angle:{self.angle / 360}\tvector to closest wall:{self.get_closest_wall()}\tvector to closest cell:'
-        #       f'{self.get_cell_awareness(cells)}\t vector to drop zone:{self.get_drop_zone_vector(drop_zone)}\t'
-        #       f'percentage of cells not yet collected:{get_percent_cells_not_in_drop_zone(cells, drop_zone)}\t'
-        #       f'currently holding cell:{self.get_is_holding_cell(cells)}')
+    def get_green_and_red_distance_sums(self, cells, rbt):
+        g_d_s = get_sum_of_distances('green', cells, rbt)
+        r_d_s = get_sum_of_distances('red', cells, rbt)
+        return [g_d_s, r_d_s]
 
+    def get_state(self, cells, drop_zone, rbt):
         state = [self.angle / 360] + self.get_closest_wall() + self.get_cell_awareness(cells) + \
                 self.get_drop_zone_vector(drop_zone) + [get_percent_cells_not_in_drop_zone(cells, drop_zone)] + \
-                self.get_is_holding_cell(cells)
-        # print('STATE:', state)
+                self.get_is_holding_cell(cells) + self.get_green_and_red_distance_sums(cells, rbt)
         return np.array(state)
 
     def set_reward(self, state):
+        # TODO: make every single reward a difference from previous state
         # where the rubber meets the road... our state vector: [angle, [wallx, wally, walld], [cellx, celly, cellg,
-        # cellr], [dzx, dzy], [cells_left], [holding_green, holding_red]]
+        # cellr], [dzx, dzy], [cells_left], [holding_green, holding_red], g_d_s, r_d_s]
         self.reward = 0
 
         # penalize for getting close to a wall
         if state[3] > .8:
-            self.reward -= state[3] * .2
+            self.reward -= state[3] * 1.5
 
         # penalize for getting close to a red cell
         if state[7]:
-            self.reward -= np.sqrt(state[4]**2 + state[5]**2)
+            self.reward -= np.sqrt(state[4] ** 2 + state[5] ** 2)
 
         # penalize for picking up a red cell
         if state[-1]:
-            self.reward -= 1
+            self.reward -= 10
 
         # penalize for facing towards a red cell
         if state[7]:
-            cell_angle = degrees(atan2(-state[5] , state[4]))
+            cell_angle = degrees(atan2(-state[5], state[4]))
             if cell_angle < 0:
                 cell_angle += 360
-            delta_angle = -((self.angle + 90)%360 - cell_angle)
+            delta_angle = -((self.angle + 90) % 360 - cell_angle)
             if delta_angle > 180:
                 delta_angle -= 360
             self.reward -= delta_angle / 360
 
+        # penalize for being around red cells and for not being around green cells
+        self.reward += sigmoid(state[13]-state[14])
 
         # penalize for staying in relatively the same location for a long time
 
         # reward for facing towards a green cell
         if state[6]:
-            cell_angle = degrees(atan2(-state[5] , state[4]))
+            cell_angle = degrees(atan2(-state[5], state[4]))
             if cell_angle < 0:
                 cell_angle += 360
-            delta_angle = -((self.angle + 90)%360 - cell_angle)
+            delta_angle = -((self.angle + 90) % 360 - cell_angle)
             if delta_angle > 180:
                 delta_angle -= 360
             self.reward += delta_angle / 360
 
         # reward for getting close to a green cell:
         if state[6]:
-            self.reward += np.sqrt(state[4]**2 + state[5]**2)
+            self.reward += np.sqrt(state[4] ** 2 + state[5] ** 2)
 
         # reward for picking up a green cell
         if state[-2]:
@@ -232,32 +253,28 @@ class Robot(pygame.sprite.Sprite):
 
         # reward for putting a green cell in the drop zone
         if state[10] < 1:
-            self.reward += (-state[10] + 1) * 5
+            self.reward += (-state[10] + 1) * 10
 
         # reward for getting close to the drop zone with a green cell
         if state[-2]:
-            self. reward += np.sqrt(state[8]**2 + state[9]**2)
+            self.reward += np.sqrt(state[8] ** 2 + state[9] ** 2)
 
-        # print(self.reward)
-        return self.reward
+        delta = self.reward - self.old_reward
+        self.old_reward = self.reward
+        return delta * 10
 
-    def train_short_memory(self, state_old, old_move, reward, state_new):
-        # target = reward
+    def train_short_memory(self, reward, old_state, new_state, action):
+        # moves is only useful for creating a memory for the network
 
-        old_move_f_b, old_move_l_r = old_move[0:2], old_move[-2:]
+        # we want our loss to be calculated based upon the moves that were actually made by the network
+        # (i.e. the activations that were higher than random chance) therefore set ytrue=1
+        # if the activations were not higher than random chance, set ytrue=0
+        # keras is going to calculate crossentropy: L = ytrue*log(ypred) + (1-ytrue)log(1-ypred)
 
-        pred_f_b, pred_l_r = self.model.predict(state_new.reshape((1, 13)))
-
-        # handle forward and backward target update
-        target_f_b = reward + self.gamma * np.amax(pred_f_b)
-        target_old_f_b = self.model.predict(state_old.reshape((1, 13)))[0]
-        target_old_f_b[0][np.argmax(old_move_f_b)] = target_f_b
-
-        # handle left and right target update
-        target_l_r = reward + self.gamma * np.amax(pred_l_r)
-        target_old_l_r = self.model.predict(state_old.reshape((1, 13)))[1]
-        target_old_l_r[0][np.argmax(old_move_l_r)] = target_l_r
-
-        target_f = np.concatenate((target_old_f_b[0] , target_old_l_r[0]))
-
-        self.model.fit(state_old.reshape((1, 13)), [target_old_f_b[0].reshape((1,2)), target_old_l_r[0].reshape((1,2))], epochs=1, verbose=0)
+        # we want to modulate our ys based upon our rewards
+        print(reward)
+        target = reward + 0.9 * np.amax(self.model.predict(old_state.reshape(1, 15))[0])
+        target_final = self.model.predict(new_state.reshape(1, 15))
+        target_final[0][np.argmax(action)] = target
+        self.model.fit(new_state.reshape(1, 15), target_final, epochs=1, verbose=0)
+        # eval = self.model.evaluate(new_state.reshape(1, 15), target_final)

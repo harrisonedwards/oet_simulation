@@ -3,7 +3,11 @@ import argparse
 from pygame.locals import *
 import numpy as np
 from oet_robot import Robot
+import pandas as pd
+import datetime
+import cv2
 from keras.utils import to_categorical
+import matplotlib.pyplot as plt
 
 
 class Cell(pygame.sprite.Sprite):
@@ -70,6 +74,12 @@ def update_all_collisions(cells, rbt):
             handle_collision(rbt, cell)
 
 
+def write_results(results):
+    now = datetime.datetime.now().strftime('%H_%M_%d_%m_%Y')
+    results.to_csv(f'./results/{now}.csv')
+    return
+
+
 def main(args):
     # initialize the pygame module and clock
     pygame.init()
@@ -104,59 +114,80 @@ def main(args):
         screen.blit(entity.image, entity.rect)
 
     running = True
-    # TODO make this counter affect the robots randomness and how much time it spends in one place
-    counter = 1.0
+
+    counter = 0
+
+    # distances, images, moves, rewards, ys = np.zeros(2), np.zeros((500, 500)), np.zeros(2), np.zeros(1), np.zeros(2)
+    distance = np.zeros(2)
+    # gray = np.zeros((500, 500))
+    intepretation = {0: 'F', 1: 'B', 2: 'L', 3: 'R'}
+    # where the rubber meets the road... our state vector: [angle, [wallx, wally, walld], [cellx, celly, cellg,
+    # cellr], [dzx, dzy], [cells_left], [holding_green, holding_red], g_d_s, r_d_s]
+    cols = ['angle', 'wallx', 'wally', 'walld', 'cellx', 'celly', 'cellg', 'cellr', 'dzx', 'dzy', 'cells_left',
+            'holding_green', 'holding_red', 'g_d_s', 'r_d_s', 'decision', 'reward']
+    results = pd.DataFrame(columns=cols)
     while running:
-
-        state_old = rbt.get_state(cells, dz)
-        counter -= 1e-0
-        if np.random.randint(0, 2) > rbt.epsilon:
-            final_move = np.concatenate((to_categorical(np.random.randint(0, 2), num_classes=2),to_categorical(np.random.randint(0, 2), num_classes=2)))
-            print('RANDOM:', final_move)
+        old_state = rbt.get_state(cells, dz, rbt)
+        model_output = rbt.model.predict(old_state.reshape(1, 15)).flatten()
+        action = np.zeros(4)
+        if np.random.randint(4) < rbt.epsilon:
+            action[np.argmax(model_output)] = 1
+            print('M', intepretation[np.argmax(model_output)])
         else:
-            # predict action based on the old state
-            move_f_b, move_l_r = rbt.model.predict(state_old.reshape((1, 13)))
-            move_f_b = to_categorical(np.argmax(move_f_b[0]), 2)
-            move_l_r = to_categorical(np.argmax(move_l_r[0]), 2)
-            final_move = np.concatenate((move_f_b, move_l_r))
-            print('PREDICT:', final_move)
-        # print(counter)
+            choice = np.random.randint(4)
+            action[choice] = 1
+            print('R', intepretation[choice])
 
+        for i in range(6):
+            screen.fill(0)
+            screen.blit(dz.image, dz.rect)
+            rbt.update(action)
+            for cell in cells:
+                screen.blit(cell.image, cell.rect)
+            update_all_collisions(cells, rbt)
+
+        new_state = rbt.get_state(cells, dz, rbt)
+        reward = rbt.set_reward(new_state)
+        rbt.train_short_memory(reward, old_state, new_state, action)
+
+        # want to store the old state, network decision, and reward
+        r = np.concatenate((old_state.flatten(), np.array((np.amax(model_output), reward))), axis=0)
+        results.loc[counter] = r
+
+        # store the new data into a long term memory
+        # states = np.vstack((states, state))
+        # distances = np.vstack((distances, [positive_distance_sum, negative_distance_sum]))
+        # images = np.vstack((images.reshape(-1, 500,500), gray.reshape(1,500,500)))
+        # moves = np.vstack((moves, action))
+        # rewards = np.vstack((rewards, reward))
+        # ys = np.vstack((ys, model_output))
+
+        # render background and drop zone, update robot, then all cells
         for event in pygame.event.get():
             if event.type == KEYDOWN:
                 if event.key == K_ESCAPE:
+                    write_results(results)
                     running = False
-                elif event.key == K_SPACE:
-                    rbt.get_state(cells, dz)
             if event.type == pygame.QUIT:
+                write_results(results)
                 running = False
 
-        # pressed_keys = pygame.key.get_pressed()
+        # image = pygame.surfarray.array3d(screen)
+        # gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        # render background and drop zone, update robot, then all cells
-        screen.fill(0)
-        screen.blit(dz.image, dz.rect)
-        # rbt.update(pressed_keys)
-        rbt.update(final_move)
-        for cell in cells:
-            screen.blit(cell.image, cell.rect)
-
-        # check for collision between robot and cells
-        update_all_collisions(cells, rbt)
-
-        state_new = rbt.get_state(cells, dz)
-
-        reward = rbt.set_reward(state_new)
-
-        # train short memory base on the new action and state
-        rbt.train_short_memory(state_old, final_move, reward, state_new)
-
-        # store the new data into a long term memory
-        # rbt.remember(state_old, final_move, reward, state_new)
-
-        # update display
         pygame.display.flip()
-        clock.tick(120)  # try to run at 120 fps
+        clock.tick(60)  # try to run at 120 fps
+        counter += 1
+        rbt.epsilon = rbt.epsilon * np.exp(-counter / 10e10000)
+        # print(rbt.epsilon)
+
+        # if counter > 5:
+        #     # train on 10 actions
+        #     rbt.train_short_memory(reward, old_state, new_state, action)
+        #     counter = 0
+        #     distances, images, moves, rewards, ys = np.zeros(2), np.zeros((500, 500)), np.zeros(2), np.zeros(
+        #         1), np.zeros(
+        #         2)
 
 
 if __name__ == "__main__":
