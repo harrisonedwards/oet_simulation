@@ -1,55 +1,120 @@
-import pygame, random
 import argparse
-from pygame.locals import *
-import numpy as np
-from oet_robot import Robot
-import pandas as pd
 import datetime
-import cv2
-from keras.utils import to_categorical
-import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import pygame
+import random
+from pygame.locals import *
+from characters import Cell, OETField, DropZone
+from oet_robot import Robot
+import gym
+from gym import spaces
 
 
-class Cell(pygame.sprite.Sprite):
+class OETEnvironment(gym.Env):
 
-    def __init__(self):
-        super(Cell, self).__init__()
-        self.image = pygame.Surface((4, 4))
-        if random.randint(0, 1):
-            self.type = 'red'
-            pygame.draw.circle(self.image, (255, 0, 0), (2, 2), 2)
+    def __init__(self, render=False):
+        super(OETEnvironment, self).__init__()
+        pygame.init()
+        # create a surface on screen
+        if render:
+            pygame.display.set_caption("OET Simulation")
+            self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         else:
-            self.type = 'green'
-            pygame.draw.circle(self.image, (0, 255, 0), (2, 2), 2)
-        self.rect = self.image.get_rect(
-            center=(random.randint(0, SCREEN_WIDTH - 10), random.randint(0, SCREEN_HEIGHT - 10)))
-        self.image.set_colorkey((0, 0, 0))
-        self.mask = pygame.mask.from_surface(self.image)
+            self.screen = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        self.rbt = Robot((SCREEN_WIDTH//2, SCREEN_HEIGHT//2), self.screen, SCREEN_WIDTH, SCREEN_HEIGHT)
+        # set up our sprite groups
+        self.cells = pygame.sprite.Group()
+        self.all_sprites = pygame.sprite.Group()
+        # generate a random number of cells
+        for i in range(random.randint(args.min_cells, args.max_cells)):
+            cell = Cell(SCREEN_WIDTH, SCREEN_HEIGHT)
+            self.all_sprites.add(cell)
+            self.cells.add(cell)
+        # create the designated drop zone
+        self.dz = DropZone(20, SCREEN_WIDTH, SCREEN_HEIGHT)
+        self.all_sprites.add(self.dz)
+        # perform initial placement of all entities
+        self.screen.fill(0)
+        for entity in self.all_sprites:
+            self.screen.blit(entity.image, entity.rect)
+        # setup gym space
+        self.action_space = spaces.Box(low=np.array([0, 0, 0, 0]), high=np.array([1, 1, 1, 1]), dtype=np.uint8)
+        self.observation_space = spaces.Box(low=0, high=4, shape=(50, 50), dtype=np.uint8)
 
-    def update(self):
-        # cases for managing collision with the edge
-        if self.rect.left < 0:
-            self.rect.left = 0
-        if self.rect.right > SCREEN_WIDTH:
-            self.rect.right = SCREEN_WIDTH
-        if self.rect.top <= 0:
-            self.rect.top = 0
-        if self.rect.bottom >= SCREEN_HEIGHT:
-            self.rect.bottom = SCREEN_HEIGHT
+    def reset(self):
+        # TODO make this less redundant from the init
+        # create a surface on screen
+        self.screen = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        # set up our sprite groups
+        self.cells = pygame.sprite.Group()
+        self.all_sprites = pygame.sprite.Group()
+        # generate a random number of cells
+        for i in range(random.randint(args.min_cells, args.max_cells)):
+            cell = Cell(SCREEN_WIDTH, SCREEN_HEIGHT)
+            self.all_sprites.add(cell)
+            self.cells.add(cell)
+        # create the designated drop zone
+        dz = DropZone(20, SCREEN_WIDTH, SCREEN_HEIGHT)
+        self.all_sprites.add(dz)
+        # perform initial placement of all entities
+        self.screen.fill(0)
+        for entity in self.all_sprites:
+            self.screen.blit(entity.image, entity.rect)
 
+    def _get_obs(self):
+        # we want to return an array that has the identities of each entity in the grid
+        obs = np.zeros((SCREEN_WIDTH, SCREEN_HEIGHT))
+        # add all of the cell locations
+        for cell in self.cells:
+            x, y = cell.rect.center
+            if cell.type == 'green':
+                obs[x, y] = 2
+            elif cell.type == 'red':
+                obs[x, y] = 3
+        # add the dropzone location:
+        x, y = self.dz.rect.center
+        obs[x, y] = 4
+        # add the robot's location
+        x, y = self.rbt.rect.center
+        obs[x, y] = 1
+        return obs
 
-class DropZone(pygame.sprite.Sprite):
+    def step(self, action):
+        # TODO: update robot action
+        # self.rbt.update(action)
 
-    def __init__(self, size):
-        super(DropZone, self).__init__()
-        self.image = pygame.Surface((size, size))
-        pygame.draw.rect(self.image, (0, 0, 127), (0, 0, size, size))
-        self.rect = self.image.get_rect(
-            center=(
-                random.randint(size // 2, SCREEN_WIDTH - size // 2),
-                random.randint(size // 2, SCREEN_HEIGHT - size // 2)))
-        self.image.set_colorkey((0, 0, 0))
-        self.mask = pygame.mask.from_surface(self.image)
+        # check for collisions
+        if pygame.sprite.spritecollideany(self.rbt, self.cells):
+            update_all_collisions(self.cells, self.rbt)
+
+        # update our observation (get a 500x500 array from pygame)
+        obs = self._get_obs()
+
+        # TODO: calculate reward
+        # self.rbt.set_reward()
+        reward = np.random.randint(0, 2)
+
+        # TODO: determine whether or not to end the game
+        done = np.random.choice([True, False])
+
+        return obs, reward, done, {}
+
+    def render(self, mode='human'):
+        for event in pygame.event.get():
+            if event.type == KEYDOWN:
+                if event.key == K_ESCAPE:
+                    running = False
+            if event.type == pygame.QUIT:
+                running = False
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                mouse_down = True
+            elif event.type == pygame.MOUSEBUTTONUP:
+                mouse_down = False
+        self.screen.fill(0)
+        for entity in self.all_sprites:
+            self.screen.blit(entity.image, entity.rect)
+        pygame.display.flip()
 
 
 def handle_collision(rbt, cell):
@@ -65,6 +130,7 @@ def handle_collision(rbt, cell):
 def update_all_collisions(cells, rbt):
     for cell in cells:
         if pygame.sprite.collide_mask(cell, rbt):
+            print(cell.mask.overlap(rbt.mask, (0, 0)))
             handle_collision(rbt, cell)
         col_test = pygame.sprite.spritecollideany(cell, cells)
         if col_test != cell:
@@ -81,120 +147,17 @@ def write_results(results):
 
 
 def main(args):
-    # initialize the pygame module and clock
-    pygame.init()
-    clock = pygame.time.Clock()
-
-    pygame.display.set_caption("OET Simulation")
-
-    # create a surface on screen that has the size of 300x300
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    screen.fill((0))
-
-    # set up our sprite groups
-    cells = pygame.sprite.Group()
-    all_sprites = pygame.sprite.Group()
-
-    # create our robot right in the middle
-    rbt = Robot([SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2], screen, SCREEN_WIDTH, SCREEN_HEIGHT)
-    all_sprites.add(rbt)
-
-    # generate a random number of cells
-    for i in range(random.randint(args.min_cells, args.max_cells)):
-        cell = Cell()
-        all_sprites.add(cell)
-        cells.add(cell)
-
-    # create the designated drop zone
-    dz = DropZone(50)
-    all_sprites.add(dz)
-
-    # draw all of the sprites initially
-    for entity in all_sprites:
-        screen.blit(entity.image, entity.rect)
-
-    running = True
-
-    counter = 0
-
-    # distances, images, moves, rewards, ys = np.zeros(2), np.zeros((500, 500)), np.zeros(2), np.zeros(1), np.zeros(2)
-    distance = np.zeros(2)
-    # gray = np.zeros((500, 500))
-    intepretation = {0: 'F', 1: 'B', 2: 'L', 3: 'R'}
-    # where the rubber meets the road... our state vector: [angle, [wallx, wally, walld], [cellx, celly, cellg,
-    # cellr], [dzx, dzy], [cells_left], [holding_green, holding_red], g_d_s, r_d_s]
-    cols = ['angle', 'wallx', 'wally', 'walld', 'cellx', 'celly', 'cellg', 'cellr', 'dzx', 'dzy', 'cells_left',
-            'holding_green', 'holding_red', 'g_d_s', 'r_d_s', 'decision', 'reward']
-    results = pd.DataFrame(columns=cols)
-    while running:
-        old_state = rbt.get_state(cells, dz, rbt)
-        model_output = rbt.model.predict(old_state.reshape(1, 15)).flatten()
-        action = np.zeros(4)
-        if np.random.randint(4) < rbt.epsilon:
-            action[np.argmax(model_output)] = 1
-            print('M', intepretation[np.argmax(model_output)])
-        else:
-            choice = np.random.randint(4)
-            action[choice] = 1
-            print('R', intepretation[choice])
-
-        for i in range(6):
-            screen.fill(0)
-            screen.blit(dz.image, dz.rect)
-            rbt.update(action)
-            for cell in cells:
-                screen.blit(cell.image, cell.rect)
-            update_all_collisions(cells, rbt)
-
-        new_state = rbt.get_state(cells, dz, rbt)
-        reward = rbt.set_reward(new_state)
-        rbt.train_short_memory(reward, old_state, new_state, action)
-
-        # want to store the old state, network decision, and reward
-        r = np.concatenate((old_state.flatten(), np.array((np.amax(model_output), reward))), axis=0)
-        results.loc[counter] = r
-
-        # store the new data into a long term memory
-        # states = np.vstack((states, state))
-        # distances = np.vstack((distances, [positive_distance_sum, negative_distance_sum]))
-        # images = np.vstack((images.reshape(-1, 500,500), gray.reshape(1,500,500)))
-        # moves = np.vstack((moves, action))
-        # rewards = np.vstack((rewards, reward))
-        # ys = np.vstack((ys, model_output))
-
-        # render background and drop zone, update robot, then all cells
-        for event in pygame.event.get():
-            if event.type == KEYDOWN:
-                if event.key == K_ESCAPE:
-                    write_results(results)
-                    running = False
-            if event.type == pygame.QUIT:
-                write_results(results)
-                running = False
-
-        # image = pygame.surfarray.array3d(screen)
-        # gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-        pygame.display.flip()
-        clock.tick(60)  # try to run at 120 fps
-        counter += 1
-        rbt.epsilon = rbt.epsilon * np.exp(-counter / 10e10000)
-        # print(rbt.epsilon)
-
-        # if counter > 5:
-        #     # train on 10 actions
-        #     rbt.train_short_memory(reward, old_state, new_state, action)
-        #     counter = 0
-        #     distances, images, moves, rewards, ys = np.zeros(2), np.zeros((500, 500)), np.zeros(2), np.zeros(
-        #         1), np.zeros(
-        #         2)
+    env = OETEnvironment(render=True)
+    for _ in range(3):
+        env.render()
+        print(env.step('test'))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Optoelectronic Tweezer Simulation Environment')
     parser.add_argument('--min_cells', dest='min_cells', default=5)
     parser.add_argument('--max_cells', dest='max_cells', default=20)
-    parser.add_argument('--screen_size', dest='screen_size', default=500)
+    parser.add_argument('--screen_size', dest='screen_size', default=50)
     args = parser.parse_args()
     SCREEN_WIDTH = args.screen_size
     SCREEN_HEIGHT = args.screen_size

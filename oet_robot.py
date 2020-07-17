@@ -56,8 +56,15 @@ def get_sum_of_distances(cell_type, cells, rbt):
     sum = np.sqrt(sum[0] ** 2 + sum[1] ** 2)
     return sum
 
+
 def sigmoid(x):
-  return 1 / (1 + np.exp(-x))
+    return 1 / (1 + np.exp(-x))
+
+
+class Sweeper(pygame.sprite.Sprite):
+
+    def __init__(self, start_loc, screen, screen_width, screen_height):
+        super(Robot, self).__init__()
 
 
 class Robot(pygame.sprite.Sprite):
@@ -229,7 +236,7 @@ class Robot(pygame.sprite.Sprite):
             self.reward -= delta_angle / 360
 
         # penalize for being around red cells and for not being around green cells
-        self.reward += sigmoid(state[13]-state[14])
+        self.reward += sigmoid(state[13] - state[14])
 
         # penalize for staying in relatively the same location for a long time
 
