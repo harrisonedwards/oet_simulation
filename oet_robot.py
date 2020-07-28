@@ -57,16 +57,6 @@ def get_sum_of_distances(cell_type, cells, rbt):
     return sum
 
 
-def sigmoid(x):
-    return 1 / (1 + np.exp(-x))
-
-
-class Sweeper(pygame.sprite.Sprite):
-
-    def __init__(self, start_loc, screen, screen_width, screen_height):
-        super(Robot, self).__init__()
-
-
 class Robot(pygame.sprite.Sprite):
 
     def __init__(self, start_loc, screen, screen_width, screen_height):

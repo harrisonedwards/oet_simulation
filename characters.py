@@ -1,18 +1,19 @@
 import pygame
 from numpy import random
+import numpy as np
 
 
 class Cell(pygame.sprite.Sprite):
 
-    def __init__(self, screen_width, screen_height):
+    def __init__(self, screen_width, screen_height, cell_type):
         super(Cell, self).__init__()
         self.image = pygame.Surface((4, 4))
         self.screen_width = screen_width
         self.screen_height = screen_height
-        if random.randint(0, 2):
+        if cell_type == 'red':
             self.type = 'red'
             pygame.draw.circle(self.image, (255, 0, 0), (2, 2), 2)
-        else:
+        elif cell_type == 'green':
             self.type = 'green'
             pygame.draw.circle(self.image, (0, 255, 0), (2, 2), 2)
         self.rect = self.image.get_rect(
@@ -30,6 +31,47 @@ class Cell(pygame.sprite.Sprite):
             self.rect.top = 0
         if self.rect.bottom >= self.screen_height:
             self.rect.bottom = self.screen_height
+
+
+class Sweeper(pygame.sprite.Sprite):
+
+    def __init__(self, cell, screen_width, screen_height):
+        super(Sweeper, self).__init__()
+        self.closest, centerx, centery = self.get_cell_offset(cell, screen_width, screen_height)
+        if int(self.closest) in [0, 1]:
+            # we are closest to the left side
+            self.image = pygame.Surface((2, 10))
+            pygame.draw.rect(self.image, (255, 255, 0), (0, 0, 2, 10))
+        elif int(self.closest) in [2,3]:
+            self.image = pygame.Surface((10, 2))
+            pygame.draw.rect(self.image, (255, 255, 0), (0, 0, 10, 2))
+        if int(self.closest) == 0:
+            self.rect = self.image.get_rect(centerx=centerx + 8, centery=centery)
+        elif int(self.closest) == 1:
+            self.rect = self.image.get_rect(centerx=centerx - 8, centery=centery)
+        elif int(self.closest) == 2:
+            self.rect = self.image.get_rect(centerx=centerx, centery=centery + 8)
+        elif int(self.closest) == 3:
+            self.rect = self.image.get_rect(centerx=centerx, centery=centery - 8)
+        self.image.set_colorkey((0, 0, 0))
+        self.mask = pygame.mask.from_surface(self.image)
+
+    def get_cell_offset(self, cell, screen_width, screen_height):
+        x, y = cell.rect.centerx, cell.rect.centery
+        closest = np.argmin([x, screen_width-x, y, screen_height-y])
+        return closest, x, y
+
+    def update(self):
+        if int(self.closest) == 0:
+            self.rect.centerx -= 1
+        if int(self.closest) == 1:
+            self.rect.centerx += 1
+        if int(self.closest) == 2:
+            self.rect.centery -= 1
+        if int(self.closest) == 3:
+            self.rect.centery += 1
+        # self.rect.bottom += 1
+        self.mask = pygame.mask.from_surface(self.image)
 
 
 class DropZone(pygame.sprite.Sprite):
